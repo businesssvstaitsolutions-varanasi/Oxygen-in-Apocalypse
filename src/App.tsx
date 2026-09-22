@@ -33,14 +33,15 @@ import { BuyCoinsModal } from './ui/BuyCoinsModal';
 import { MobileControls } from './ui/MobileControls';
 import { OrientationWarning } from './ui/OrientationWarning';
 import { DebugOverlay } from './ui/DebugOverlay';
+import { CompanyIntro } from './ui/CompanyIntro';
 import { Coins } from 'lucide-react';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Central Game State
-  const [screen, setScreen] = useState<GameScreen>('MENU');
-  const screenRef = useRef<GameScreen>('MENU');
+  const [screen, setScreen] = useState<GameScreen>('COMPANY_INTRO');
+  const screenRef = useRef<GameScreen>('COMPANY_INTRO');
   const [isPointerLocked, setIsPointerLocked] = useState<boolean>(false);
   const lastLockExitTimeRef = useRef<number>(0);
   const [saveData, setSaveData] = useState<PlayerSaveData>(SaveManager.load());
@@ -131,7 +132,7 @@ export default function App() {
 
   // Lobby soundtrack management: plays during menus/arsenal/lobby, stops during combat
   useEffect(() => {
-    const isLobby = ['MENU', 'MISSIONS', 'ARSENAL', 'SETTINGS', 'SPECIMEN', 'BUY_COINS'].includes(screen);
+    const isLobby = ['MENU', 'MISSIONS', 'ARSENAL', 'SETTINGS', 'SPECIMEN', 'BUY_COINS', 'COMPANY_INTRO'].includes(screen);
     if (isLobby) {
       soundFx.startLobbyMusic();
     } else {
@@ -1347,6 +1348,17 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* COMPANY INTRO SPLASH */}
+      {screen === 'COMPANY_INTRO' && (
+        <CompanyIntro
+          onComplete={() => {
+            soundFx.userInteracted();
+            screenRef.current = 'MENU';
+            setScreen('MENU');
+          }}
+        />
       )}
 
       {/* MAIN MENU */}

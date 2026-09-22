@@ -1,4 +1,4 @@
-export type GameScreen = 'MENU' | 'CUTSCENE' | 'PLAYING' | 'PAUSED' | 'ARSENAL' | 'MISSIONS' | 'SETTINGS' | 'VICTORY' | 'DEFEAT' | 'SPECIMEN' | 'MISSION10_ENDING';
+export type GameScreen = 'COMPANY_INTRO' | 'MENU' | 'CUTSCENE' | 'PLAYING' | 'PAUSED' | 'ARSENAL' | 'MISSIONS' | 'SETTINGS' | 'VICTORY' | 'DEFEAT' | 'SPECIMEN' | 'MISSION10_ENDING';
 
 export type Difficulty = 'EASY' | 'NORMAL' | 'HARD' | 'VERY HARD' | 'NIGHTMARE';
 

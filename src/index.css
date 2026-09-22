@@ -26,6 +26,14 @@
   letter-spacing: 0.05em;
 }
 
+.font-rajdhani {
+  font-family: 'Rajdhani', 'Chakra Petch', sans-serif;
+}
+
+.font-oswald {
+  font-family: 'Oswald', 'Teko', sans-serif;
+}
+
 /* Vignette & Blood overlays */
 .blood-vignette {
   background: radial-gradient(circle at center, transparent 40%, rgba(180, 0, 0, 0.6) 85%, rgba(130, 0, 0, 0.9) 100%);
