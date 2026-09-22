@@ -426,7 +426,8 @@ export class ParticleSystem {
   }
 
   // Metal sparks / wall impact
-  public static spawnSparks(pos: THREE.Vector3, normal: THREE.Vector3) {
+  public static spawnSparks(pos: THREE.Vector3, normal?: THREE.Vector3) {
+    const norm = normal || new THREE.Vector3(0, 1, 0);
     for (let i = 0; i < 6; i++) {
       const p = this.getFreeParticle();
       if (!p) break;
@@ -442,9 +443,9 @@ export class ParticleSystem {
       p.scaleDelta = -0.3;
 
       p.velocity.set(
-        normal.x * 3 + (Math.random() - 0.5) * 3,
-        normal.y * 3 + Math.random() * 3,
-        normal.z * 3 + (Math.random() - 0.5) * 3
+        norm.x * 3 + (Math.random() - 0.5) * 3,
+        norm.y * 3 + Math.random() * 3,
+        norm.z * 3 + (Math.random() - 0.5) * 3
       );
       p.rotVelocity.set(0, 0, 0);
     }

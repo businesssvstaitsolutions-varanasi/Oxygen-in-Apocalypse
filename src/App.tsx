@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { GameScreen, PlayerSaveData, HitResult, GameStats, WeaponTypeKey } from './types';
+import { GameScreen, PlayerSaveData, HitResult, GameStats, WeaponTypeKey, KillFeedEntry, AllyOrder } from './types';
 import { SaveManager } from './core/SaveManager';
 import { EnvironmentBuilder, EnvironmentResult } from './models/EnvironmentBuilder';
 import { PlayerController, PlayerInput } from './player/PlayerController';
@@ -20,7 +20,6 @@ import { TurretManager } from './tactical/TurretManager';
 import { AllySoldier } from './tactical/AllySoldier';
 import { DroneManager } from './tactical/DroneManager';
 import { Mission10EndingCutscene } from './cutscene/Mission10EndingCutscene';
-import { AllyOrder } from './types';
 
 // UI Components
 import { HUD } from './ui/HUD';
@@ -97,6 +96,53 @@ export default function App() {
     timestamp: 0,
   });
   const [endMissionStats, setEndMissionStats] = useState<{ isVictory: boolean; stats: GameStats } | null>(null);
+  const [killFeed, setKillFeed] = useState<KillFeedEntry[]>([]);
+
+  const addKillFeedEntry = (
+    victim: string,
+    weapon: string,
+    isHeadshot: boolean,
+    isBoss: boolean,
+    killer: string = 'OPERATOR'
+  ) => {
+    const entry: KillFeedEntry = {
+      id: `${Date.now()}_${Math.random()}`,
+      killer,
+      weapon,
+      victim,
+      isHeadshot,
+      isBoss,
+      timestamp: Date.now(),
+    };
+    setKillFeed((prev) => [...prev.slice(-5), entry]);
+  };
+
+  // Auto-prune stale killfeed entries
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setKillFeed((prev) => {
+        const filtered = prev.filter((k) => now - k.timestamp < 5000);
+        return filtered.length === prev.length ? prev : filtered;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Lobby soundtrack management: plays during menus/arsenal/lobby, stops during combat
+  useEffect(() => {
+    const isLobby = ['MENU', 'MISSIONS', 'ARSENAL', 'SETTINGS', 'SPECIMEN', 'BUY_COINS'].includes(screen);
+    if (isLobby) {
+      soundFx.startLobbyMusic();
+    } else {
+      soundFx.stopLobbyMusic();
+    }
+    return () => {
+      if (!isLobby) {
+        soundFx.stopLobbyMusic();
+      }
+    };
+  }, [screen]);
 
   // Core Engine Instances (persisted across renders)
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -354,6 +400,9 @@ export default function App() {
             missionManager.stats.shotsHit++;
             const { isFatal, zombie } = zombieManager.applyDamage(hitResult, (killedZ, isHeadshot) => {
               missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+              const weaponName = player.weaponConfig.name.split(' ')[0] || 'WEAPON';
+              const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+              addKillFeedEntry(victimName, weaponName, isHeadshot, Boolean(killedZ.isBoss), 'OPERATOR');
             });
 
             setHitFeedback({
@@ -366,6 +415,8 @@ export default function App() {
             // Explode barrel damage
             zombieManager.damageArea(barrel.position, 7.5, 220, (killedZ) => {
               missionManager.recordKill(false, killedZ.config.rewardCredits);
+              const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+              addKillFeedEntry(victimName, 'BARREL', false, Boolean(killedZ.isBoss), 'OPERATOR');
             });
             // If player is too close, take blast damage
             const distToPlayer = player.position.distanceTo(barrel.position);
@@ -410,6 +461,8 @@ export default function App() {
           zombieManager,
           (killedZ: any, isHeadshot: boolean) => {
             missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+            const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+            addKillFeedEntry(victimName, 'GRENADE', isHeadshot, Boolean(killedZ.isBoss), 'OPERATOR');
           },
           (shakeIntensity: number) => {
             player.camera.rotation.z += (Math.random() - 0.5) * 0.06 * shakeIntensity;
@@ -421,6 +474,8 @@ export default function App() {
           zombieManager,
           (killedZ: any, isHeadshot: boolean) => {
             missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+            const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+            addKillFeedEntry(victimName, 'SENTRY TURRET', isHeadshot, Boolean(killedZ.isBoss), 'TURRET');
           }
         );
 
@@ -441,6 +496,8 @@ export default function App() {
             zombieManager,
             (killedZ: any, isHeadshot: boolean) => {
               missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+              const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+              addKillFeedEntry(victimName, 'HE ROCKET', isHeadshot, Boolean(killedZ.isBoss), 'UAV DRONE');
             },
             player.position,
             (shakeIntensity: number) => {
@@ -460,6 +517,8 @@ export default function App() {
             zombieManager,
             (killedZ: any, isHeadshot: boolean) => {
               missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+              const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+              addKillFeedEntry(victimName, 'HE ROCKET', isHeadshot, Boolean(killedZ.isBoss), 'UAV DRONE');
             },
             player.position,
             (shakeIntensity: number) => {
@@ -484,6 +543,8 @@ export default function App() {
             zombieManager,
             (killedZ: any, isHeadshot: boolean) => {
               missionManager.recordKill(isHeadshot, killedZ.config.rewardCredits, killedZ.type === 'colossus');
+              const victimName = killedZ.isBoss ? (killedZ.config.name || 'BOSS') : killedZ.config.name;
+              addKillFeedEntry(victimName, 'M4A1 RIFLE', isHeadshot, Boolean(killedZ.isBoss), 'SQUAD ALLY');
             }
           );
         }
@@ -1256,6 +1317,7 @@ export default function App() {
           }}
           allyOrder={allyOrder}
           onToggleAllyOrder={handleToggleAllyOrder}
+          killFeed={killFeed}
         />
       )}
 

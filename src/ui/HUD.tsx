@@ -85,6 +85,15 @@ interface HUDProps {
   onDroneDescend?: () => void;
   allyOrder?: AllyOrder;
   onToggleAllyOrder?: () => void;
+  killFeed?: Array<{
+    id: string;
+    killer: string;
+    weapon: string;
+    victim: string;
+    isHeadshot: boolean;
+    isBoss: boolean;
+    timestamp: number;
+  }>;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -118,6 +127,7 @@ export const HUD: React.FC<HUDProps> = ({
   onDroneDescend,
   allyOrder = 'FOLLOW_ME',
   onToggleAllyOrder,
+  killFeed = [],
 }) => {
   const radarCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [, setFrameTick] = useState<number>(0);
@@ -731,11 +741,45 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       </div>
 
+      {/* DYNAMIC KILL FEED */}
+      {killFeed && killFeed.length > 0 && (
+        <div className="absolute top-16 sm:top-20 right-2 sm:right-4 z-25 flex flex-col items-end gap-1 pointer-events-none max-w-[280px] sm:max-w-xs">
+          {killFeed.slice(-5).map((kf) => (
+            <div
+              key={kf.id}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono backdrop-blur-md shadow-lg transition-all ${
+                kf.isBoss
+                  ? 'bg-amber-950/95 border-amber-500/90 text-amber-200 ring-1 ring-amber-500/50'
+                  : kf.isHeadshot
+                  ? 'bg-red-950/90 border-red-500/80 text-red-100'
+                  : 'bg-black/85 border-zinc-700 text-zinc-200'
+              }`}
+            >
+              <span className="font-bold text-sky-400 font-teko text-xs sm:text-sm tracking-wide shrink-0">
+                {kf.killer}
+              </span>
+              <span className="text-[9px] sm:text-[10px] px-1 py-0.2 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono font-bold uppercase shrink-0">
+                {kf.weapon}
+              </span>
+              {kf.isHeadshot && (
+                <span className="text-red-400 font-black text-[9px] px-1 py-0.2 rounded bg-red-950/90 border border-red-500/60 shrink-0">
+                  🎯 HS
+                </span>
+              )}
+              <Skull className={`w-3 h-3 shrink-0 ${kf.isBoss ? 'text-amber-400 animate-pulse' : kf.isHeadshot ? 'text-red-400' : 'text-zinc-400'}`} />
+              <span className={`font-teko text-xs sm:text-sm font-bold uppercase truncate ${kf.isBoss ? 'text-amber-400 font-black tracking-wider' : 'text-zinc-100'}`}>
+                {kf.victim}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* BOSS HEALTH BAR */}
       {boss && !boss.isDead && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 w-64 sm:w-80 md:w-96 bg-black/85 border border-red-600/80 p-2 rounded shadow-2xl backdrop-blur-sm">
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 w-64 sm:w-80 md:w-96 bg-black/85 border border-red-600/80 p-2 rounded shadow-2xl backdrop-blur-sm z-20">
           <div className="flex justify-between items-center text-xs font-teko text-red-500 tracking-wider font-bold mb-1">
-            <span>MUTANT BOSS: THE COLOSSUS</span>
+            <span>MUTANT BOSS: {boss.config?.name?.toUpperCase() || 'THE COLOSSUS'}</span>
             <span>{Math.ceil((boss.hp / boss.maxHp) * 100)}%</span>
           </div>
           <div className="h-2.5 w-full bg-zinc-900 border border-zinc-800 rounded-xs overflow-hidden">

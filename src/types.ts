@@ -151,3 +151,13 @@ export interface HitResult {
   targetId?: string;
   point?: [number, number, number];
 }
+
+export interface KillFeedEntry {
+  id: string;
+  killer: string;
+  weapon: string;
+  victim: string;
+  isHeadshot: boolean;
+  isBoss: boolean;
+  timestamp: number;
+}

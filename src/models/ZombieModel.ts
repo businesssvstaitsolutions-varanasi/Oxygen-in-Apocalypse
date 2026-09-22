@@ -57,6 +57,7 @@ export interface ZombieInstance {
   frenzyCooldownTimer?: number;
   exhaustionTimer?: number;
   targetIsDrone?: boolean;
+  hasScreamed?: boolean;
 }
 
 export class ZombieModelFactory {

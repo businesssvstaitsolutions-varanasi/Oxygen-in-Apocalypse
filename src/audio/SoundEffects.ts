@@ -914,6 +914,247 @@ class SoundSystem {
 
     this.playNoise(0.9, 800, 120, 0.8);
   }
+
+  public playFleshImpact(dist = 0, isHeadshot = false) {
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const falloff = Math.max(0.15, 1.0 - dist / 40);
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(isHeadshot ? 850 : 260, now);
+    osc.frequency.exponentialRampToValueAtTime(isHeadshot ? 150 : 60, now + 0.08);
+
+    gain.gain.setValueAtTime((isHeadshot ? 0.65 : 0.4) * falloff, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.1);
+
+    this.playNoise(0.06, 1400, 300, 0.35 * falloff);
+  }
+
+  public playBossDeath() {
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+
+    // Sub roar
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.linearRampToValueAtTime(140, now + 0.4);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 1.8);
+
+    gain.gain.setValueAtTime(0.9, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.9);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 2.0);
+
+    this.playNoise(1.2, 600, 80, 0.85);
+  }
+
+  public playRocketExplosion(dist = 0) {
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const falloff = Math.max(0.2, 1.0 - dist / 60);
+
+    // Deep sub bass boom
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(90, now);
+    osc.frequency.exponentialRampToValueAtTime(22, now + 0.6);
+
+    gain.gain.setValueAtTime(0.95 * falloff, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.75);
+
+    this.playNoise(0.55, 1800, 150, 0.85 * falloff);
+  }
+
+  public playDroneDestroyed() {
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+
+    // Circuit break screech + explosion
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1200, now);
+    osc.frequency.exponentialRampToValueAtTime(60, now + 0.4);
+
+    gain.gain.setValueAtTime(0.75, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+
+    this.playNoise(0.5, 2200, 200, 0.75);
+  }
+
+  public playBloaterDetonation(dist = 0) {
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const falloff = Math.max(0.2, 1.0 - dist / 50);
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(35, now + 0.4);
+
+    gain.gain.setValueAtTime(0.8 * falloff, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+
+    this.playNoise(0.6, 1600, 200, 0.8 * falloff);
+  }
+
+  // --- LOBBY DARK TACTICAL SYNTHWAVE SOUNDTRACK ---
+  private lobbyTimer: number | null = null;
+  private lobbyStep: number = 0;
+  private isLobbyMusicActive: boolean = false;
+
+  public startLobbyMusic() {
+    this.initContext();
+    if (this.isLobbyMusicActive) return;
+    this.isLobbyMusicActive = true;
+    this.lobbyStep = 0;
+
+    // 130 BPM = ~115ms per 16th note step
+    const stepInterval = 115;
+
+    const bassNotes = [55, 55, 55, 62, 55, 55, 65, 55, 52, 52, 52, 58, 52, 52, 60, 52];
+    const leadNotes = [220, 0, 220, 261.63, 0, 293.66, 0, 261.63, 196, 0, 220, 0, 261.63, 0, 246.94, 0];
+
+    const tick = () => {
+      if (!this.isLobbyMusicActive || !this.ctx || !this.ambientGain) return;
+      if (this.isMuted || this.musicVolume <= 0) {
+        this.lobbyTimer = window.setTimeout(tick, stepInterval);
+        return;
+      }
+
+      const now = this.ctx.currentTime;
+      const step = this.lobbyStep % 16;
+      this.lobbyStep++;
+
+      // 1. Kick on steps 0, 4, 8, 12 (4-on-the-floor)
+      if (step % 4 === 0) {
+        const kickOsc = this.ctx.createOscillator();
+        const kickGain = this.ctx.createGain();
+        kickOsc.type = 'sine';
+        kickOsc.frequency.setValueAtTime(140, now);
+        kickOsc.frequency.exponentialRampToValueAtTime(38, now + 0.09);
+
+        kickGain.gain.setValueAtTime(this.musicVolume * 0.48, now);
+        kickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+        kickOsc.connect(kickGain);
+        kickGain.connect(this.ambientGain);
+        kickOsc.start(now);
+        kickOsc.stop(now + 0.13);
+      }
+
+      // 2. Snare on steps 4, 12
+      if (step === 4 || step === 12) {
+        const snareOsc = this.ctx.createOscillator();
+        const snareGain = this.ctx.createGain();
+        snareOsc.type = 'triangle';
+        snareOsc.frequency.setValueAtTime(240, now);
+        snareOsc.frequency.exponentialRampToValueAtTime(100, now + 0.08);
+
+        snareGain.gain.setValueAtTime(this.musicVolume * 0.35, now);
+        snareGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+        snareOsc.connect(snareGain);
+        snareGain.connect(this.ambientGain);
+        snareOsc.start(now);
+        snareOsc.stop(now + 0.11);
+
+        this.playNoise(0.09, 3000, 800, this.musicVolume * 0.28);
+      }
+
+      // 3. Hi-hats on every off-beat (steps 2, 6, 10, 14) and 16th rolls
+      if (step % 2 === 0) {
+        this.playNoise(0.035, 7000, 3500, this.musicVolume * (step % 4 === 2 ? 0.22 : 0.12));
+      }
+
+      // 4. Rolling Dark Synth Bassline (16th notes)
+      const bassFreq = bassNotes[step];
+      if (bassFreq > 0) {
+        const bassOsc = this.ctx.createOscillator();
+        const bassGain = this.ctx.createGain();
+        const bassFilter = this.ctx.createBiquadFilter();
+
+        bassOsc.type = 'sawtooth';
+        bassOsc.frequency.setValueAtTime(bassFreq, now);
+
+        bassFilter.type = 'lowpass';
+        bassFilter.frequency.setValueAtTime(550, now);
+        bassFilter.frequency.exponentialRampToValueAtTime(140, now + 0.09);
+
+        bassGain.gain.setValueAtTime(this.musicVolume * 0.42, now);
+        bassGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+        bassOsc.connect(bassFilter);
+        bassFilter.connect(bassGain);
+        bassGain.connect(this.ambientGain);
+        bassOsc.start(now);
+        bassOsc.stop(now + 0.11);
+      }
+
+      // 5. Tactical Lead Arp Notes
+      const leadFreq = leadNotes[step];
+      if (leadFreq > 0 && Math.floor(this.lobbyStep / 16) % 4 >= 1) {
+        const leadOsc = this.ctx.createOscillator();
+        const leadGain = this.ctx.createGain();
+        leadOsc.type = 'square';
+        leadOsc.frequency.setValueAtTime(leadFreq, now);
+
+        leadGain.gain.setValueAtTime(this.musicVolume * 0.18, now);
+        leadGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+        leadOsc.connect(leadGain);
+        leadGain.connect(this.ambientGain);
+        leadOsc.start(now);
+        leadOsc.stop(now + 0.15);
+      }
+
+      this.lobbyTimer = window.setTimeout(tick, stepInterval);
+    };
+
+    tick();
+  }
+
+  public stopLobbyMusic() {
+    this.isLobbyMusicActive = false;
+    if (this.lobbyTimer !== null) {
+      clearTimeout(this.lobbyTimer);
+      this.lobbyTimer = null;
+    }
+  }
 }
 
 export const soundFx = new SoundSystem();
