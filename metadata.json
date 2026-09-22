@@ -1,0 +1,6 @@
+{
+  "name": "DEADZONE: OUTBREAK",
+  "description": "A high-fidelity 3D first-person zombie survival shooter with intense urban combat, weapon upgrades, and campaign missions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

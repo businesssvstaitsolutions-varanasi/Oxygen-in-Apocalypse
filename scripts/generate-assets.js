@@ -1,0 +1,432 @@
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
+
+// Precise letter positions along the top curve (R = 170, Center = 256, 256)
+const topLetters = [
+  { char: 'D', angle: -44 },
+  { char: 'E', angle: -33 },
+  { char: 'A', angle: -22 },
+  { char: 'D', angle: -11 },
+  { char: ' ', angle: 0 },
+  { char: 'Z', angle: 11 },
+  { char: 'O', angle: 22 },
+  { char: 'N', angle: 33 },
+  { char: 'E', angle: 44 },
+];
+
+const lettersSvg = topLetters
+  .filter((l) => l.char !== ' ')
+  .map((l) => {
+    const rad = (l.angle * Math.PI) / 180;
+    const r = 168;
+    const x = Math.round((256 + r * Math.sin(rad)) * 10) / 10;
+    const y = Math.round((256 - r * Math.cos(rad)) * 10) / 10;
+    return `
+    <g transform="translate(${x}, ${y}) rotate(${l.angle})">
+      <!-- 1. Deep drop shadow -->
+      <text x="0" y="0" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="52" text-anchor="middle" dominant-baseline="central" fill="#000000" stroke="#000000" stroke-width="10" stroke-linejoin="round">${l.char}</text>
+      <!-- 2. Dark metal bevel border -->
+      <text x="0" y="0" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="52" text-anchor="middle" dominant-baseline="central" fill="#450808" stroke="#22252a" stroke-width="5" stroke-linejoin="round">${l.char}</text>
+      <!-- 3. Vibrant Chiseled Crimson Red Face -->
+      <text x="0" y="0" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="52" text-anchor="middle" dominant-baseline="central" fill="#dc2626">${l.char}</text>
+      <!-- 4. Weathered Top Highlights -->
+      <text x="-1" y="-2" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="50" text-anchor="middle" dominant-baseline="central" fill="#fca5a5" opacity="0.5">${l.char}</text>
+    </g>`;
+  })
+  .join('\n');
+
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Glow filter for fiery eyes -->
+    <filter id="eyeGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Metal Drop Shadow -->
+    <filter id="metalShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000000" flood-opacity="0.95" />
+    </filter>
+
+    <!-- Gradients -->
+    <radialGradient id="skyGrad" cx="50%" cy="32%" r="50%">
+      <stop offset="0%" stop-color="#4e0e0e" />
+      <stop offset="45%" stop-color="#280707" />
+      <stop offset="85%" stop-color="#120404" />
+      <stop offset="100%" stop-color="#070202" />
+    </radialGradient>
+
+    <radialGradient id="rimGrad" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#555a62" />
+      <stop offset="25%" stop-color="#32363d" />
+      <stop offset="55%" stop-color="#1b1d21" />
+      <stop offset="80%" stop-color="#383d45" />
+      <stop offset="100%" stop-color="#111315" />
+    </radialGradient>
+
+    <radialGradient id="innerBevel" cx="50%" cy="50%" r="50%">
+      <stop offset="68%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="88%" stop-color="#3d0a0a" stop-opacity="0.45" />
+      <stop offset="97%" stop-color="#000000" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#551010" stop-opacity="0.95" />
+    </radialGradient>
+
+    <linearGradient id="plateGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3d434a" />
+      <stop offset="15%" stop-color="#24282d" />
+      <stop offset="50%" stop-color="#17191d" />
+      <stop offset="85%" stop-color="#2c3138" />
+      <stop offset="100%" stop-color="#111316" />
+    </linearGradient>
+
+    <linearGradient id="bulletBrass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="35%" stop-color="#d97706" />
+      <stop offset="75%" stop-color="#92400e" />
+      <stop offset="100%" stop-color="#451a03" />
+    </linearGradient>
+
+    <linearGradient id="bulletTip" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fca5a5" />
+      <stop offset="50%" stop-color="#dc2626" />
+      <stop offset="100%" stop-color="#7f1d1d" />
+    </linearGradient>
+
+    <linearGradient id="bloodSplatter" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#991b1b" stop-opacity="0.95" />
+      <stop offset="50%" stop-color="#580808" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#290303" stop-opacity="0.75" />
+    </linearGradient>
+  </defs>
+
+  <!-- 1. Outer Dark Drop Shadow -->
+  <circle cx="256" cy="260" r="240" fill="#000000" opacity="0.7" filter="url(#metalShadow)" />
+
+  <!-- 2. Weathered Steel Circular Rim -->
+  <circle cx="256" cy="256" r="240" fill="url(#rimGrad)" stroke="#15171a" stroke-width="4" />
+  <circle cx="256" cy="256" r="236" fill="none" stroke="#6b7280" stroke-width="2" opacity="0.5" />
+  <circle cx="256" cy="256" r="224" fill="none" stroke="#0a0c0e" stroke-width="5" />
+  <circle cx="256" cy="256" r="220" fill="none" stroke="#7f1d1d" stroke-width="2.5" stroke-dasharray="14,8,4,8" opacity="0.6" />
+
+  <!-- 3. Bullet Craters and Steel Rivets along Rim -->
+  <!-- Top Center Bullet Crater -->
+  <g transform="translate(256, 32)">
+    <ellipse cx="0" cy="0" rx="9" ry="7" fill="#090a0c" stroke="#33383e" stroke-width="2" />
+    <circle cx="0" cy="0" r="5" fill="#000000" />
+    <path d="M-13,-4 L-7,-1 M11,-5 L6,-1 M-9,7 L-4,3 M9,8 L5,2" stroke="#521313" stroke-width="1.5" opacity="0.85" />
+  </g>
+  <!-- Top Left Rivet -->
+  <g transform="translate(138, 58)">
+    <circle cx="0" cy="0" r="7.5" fill="#0c0e10" stroke="#3a3f45" stroke-width="1.5" />
+    <circle cx="0" cy="0" r="4" fill="#000000" />
+    <path d="M-2,-2 L2,2 M-2,2 L2,-2" stroke="#25282d" stroke-width="1.2" />
+  </g>
+  <!-- Top Right Rivet -->
+  <g transform="translate(374, 58)">
+    <circle cx="0" cy="0" r="7.5" fill="#0c0e10" stroke="#3a3f45" stroke-width="1.5" />
+    <circle cx="0" cy="0" r="4" fill="#000000" />
+    <path d="M-2,-2 L2,2 M-2,2 L2,-2" stroke="#25282d" stroke-width="1.2" />
+  </g>
+  <!-- Left Bullet Hole -->
+  <g transform="translate(38, 195)">
+    <ellipse cx="0" cy="0" rx="10" ry="9" fill="#060708" stroke="#451414" stroke-width="2" />
+    <circle cx="0" cy="0" r="5.5" fill="#000000" />
+  </g>
+  <!-- Right Bullet Hole -->
+  <g transform="translate(474, 205)">
+    <ellipse cx="0" cy="0" rx="9" ry="8" fill="#060708" stroke="#451414" stroke-width="2" />
+    <circle cx="0" cy="0" r="5" fill="#000000" />
+  </g>
+  <!-- Lower Left Bullet Hole -->
+  <g transform="translate(68, 375)">
+    <circle cx="0" cy="0" r="6.5" fill="#050607" stroke="#30353b" stroke-width="1.5" />
+    <circle cx="0" cy="0" r="3.5" fill="#000000" />
+  </g>
+
+  <!-- 4. Blood Splatters across Rim -->
+  <path d="M 28,155 Q 58,175 78,160 Q 108,145 98,175 Q 78,205 48,190 Z" fill="url(#bloodSplatter)" />
+  <path d="M 425,65 Q 455,85 475,115 Q 445,135 435,105 Z" fill="url(#bloodSplatter)" />
+  <path d="M 225,16 Q 245,33 275,20 Q 255,43 235,38 Z" fill="url(#bloodSplatter)" />
+  <circle cx="68" cy="138" r="4.5" fill="#660d0d" opacity="0.85" />
+  <circle cx="83" cy="128" r="3" fill="#580808" opacity="0.75" />
+  <circle cx="438" cy="148" r="4" fill="#660d0d" opacity="0.85" />
+  <circle cx="463" cy="168" r="2.5" fill="#580808" opacity="0.85" />
+
+  <!-- 5. Inner Badge Backdrop (Apocalyptic Sky & City Ruins) -->
+  <circle cx="256" cy="256" r="212" fill="url(#skyGrad)" stroke="#110303" stroke-width="4" />
+
+  <!-- Ruined City Skyline Silhouette in background -->
+  <g opacity="0.5">
+    <path d="M 58,330 L 78,308 L 94,308 L 104,288 L 114,288 L 119,330 
+             L 134,258 L 149,258 L 154,273 L 169,268 L 179,330 
+             L 199,238 L 209,233 L 219,248 L 234,243 L 244,330 
+             L 269,228 L 279,238 L 294,233 L 304,253 L 319,330 
+             L 339,248 L 354,258 L 369,253 L 384,330 
+             L 399,278 L 414,283 L 429,273 L 454,330 Z" fill="#140202" />
+    <ellipse cx="256" cy="270" rx="190" ry="60" fill="#3a0808" opacity="0.3" filter="url(#eyeGlow)" />
+  </g>
+
+  <!-- 6. Left Element: BIOHAZARD SYMBOL -->
+  <g transform="translate(132, 275) scale(0.64)" filter="url(#metalShadow)">
+    <circle cx="0" cy="0" r="48" fill="none" stroke="#881313" stroke-width="8" opacity="0.75" />
+    <circle cx="0" cy="0" r="16" fill="#7f1d1d" />
+    <circle cx="0" cy="0" r="7" fill="#100303" />
+    <g stroke="#991b1b" stroke-width="12" fill="none">
+      <circle cx="0" cy="-32" r="26" stroke-dasharray="130,40" stroke-dashoffset="10" />
+      <circle cx="-28" cy="18" r="26" stroke-dasharray="130,40" stroke-dashoffset="10" />
+      <circle cx="28" cy="18" r="26" stroke-dasharray="130,40" stroke-dashoffset="10" />
+    </g>
+    <path d="M 0,-14 L 0,-48 M -12,7 L -42,24 M 12,7 L 42,24" stroke="#100303" stroke-width="6" />
+  </g>
+
+  <!-- 7. Right Element: TACTICAL ASSAULT RIFLE & BRASS BULLETS -->
+  <g transform="translate(372, 270) rotate(-32) scale(0.7)" filter="url(#metalShadow)">
+    <path d="M -70,2 L -45,-2 L -40,-8 L -10,-8 L -8,-2 L 50,-2 L 70,-4 L 75,-4 L 75,0 L 70,0 L 50,4 L 15,4 L 10,12 L -5,12 L 0,4 L -30,4 L -38,18 L -48,16 L -42,4 L -65,6 L -70,20 L -80,18 L -75,2 Z" 
+          fill="#1c2024" stroke="#881313" stroke-width="2.5" />
+    <path d="M 5,4 Q 15,22 18,34 L 6,36 Q 3,22 -3,4 Z" fill="#2d3339" stroke="#7f1d1d" stroke-width="2" />
+    <rect x="-5" y="-14" width="28" height="6" fill="#111417" stroke="#3f454d" stroke-width="1" />
+    <line x1="75" y1="-2" x2="88" y2="-2" stroke="#525b66" stroke-width="2" />
+  </g>
+  <!-- Brass Bullet Cartridges on Right -->
+  <g transform="translate(412, 335) rotate(-20) scale(0.62)">
+    <g transform="translate(0, 0)">
+      <rect x="0" y="8" width="10" height="22" rx="2" fill="url(#bulletBrass)" stroke="#78350f" stroke-width="1" />
+      <path d="M 0,8 Q 5,-4 10,8 Z" fill="url(#bulletTip)" />
+      <rect x="-1" y="28" width="12" height="4" rx="1" fill="#78350f" />
+    </g>
+    <g transform="translate(22, 10) rotate(15)">
+      <rect x="0" y="8" width="10" height="22" rx="2" fill="url(#bulletBrass)" stroke="#78350f" stroke-width="1" />
+      <path d="M 0,8 Q 5,-4 10,8 Z" fill="url(#bulletTip)" />
+      <rect x="-1" y="28" width="12" height="4" rx="1" fill="#78350f" />
+    </g>
+    <g transform="translate(40, 24) rotate(30)">
+      <rect x="0" y="8" width="9" height="20" rx="2" fill="url(#bulletBrass)" stroke="#78350f" stroke-width="1" />
+      <path d="M 0,8 Q 4.5,-3 9,8 Z" fill="url(#bulletTip)" />
+      <rect x="-1" y="26" width="11" height="3" rx="1" fill="#78350f" />
+    </g>
+  </g>
+
+  <!-- 8. Centerpiece: MUTANT ZOMBIE SILHOUETTE WITH GLOWING EYES -->
+  <g transform="translate(256, 258)">
+    <!-- Zombie Back Glow -->
+    <path d="M -50,-105 Q -25,-125 0,-125 Q 25,-125 50,-105 Q 65,-75 55,-40 
+             Q 90,-25 110,25 Q 118,70 125,120 L -125,120 
+             Q -118,70 -110,25 Q -90,-25 -55,-40 Q -65,-75 -50,-105 Z" 
+          fill="#ff2200" opacity="0.14" filter="url(#eyeGlow)" />
+
+    <!-- Head & Upper Torso -->
+    <path d="M 0,-122 
+             C 18,-122 34,-112 40,-95 
+             C 45,-82 42,-68 44,-55 
+             C 47,-45 54,-40 65,-36 
+             C 85,-28 102,-8 112,18 
+             C 118,34 116,56 122,82 
+             C 126,98 124,115 125,125 
+             L -125,125 
+             C -124,115 -126,98 -122,82 
+             C -116,56 -118,34 -112,18 
+             C -102,-8 -85,-28 -65,-36 
+             C -54,-40 -47,-45 -44,-55 
+             C -42,-68 -45,-82 -40,-95 
+             C -34,-112 -18,-122 0,-122 Z" 
+          fill="#0a0303" stroke="#220505" stroke-width="2" />
+
+    <!-- Ribs & Muscle Striations -->
+    <path d="M -30,-30 Q 0,-15 30,-30 M -45,-10 Q 0,10 45,-10 M -60,15 Q -20,35 0,25 Q 20,35 60,15 M -75,45 Q -20,68 0,60 Q 20,68 75,45" 
+          stroke="#3d0a0a" stroke-width="4" stroke-linecap="round" fill="none" />
+
+    <!-- Brow & Jaw Contour -->
+    <path d="M -26,-80 L -12,-74 L 0,-76 L 12,-74 L 26,-80" stroke="#000" stroke-width="4" fill="none" />
+    <path d="M -22,-68 L -14,-62 L 0,-63 L 14,-62 L 22,-68" stroke="#1c0505" stroke-width="3" fill="none" />
+    <!-- Snarl with Teeth -->
+    <path d="M -18,-50 Q 0,-45 18,-50 Q 0,-34 -18,-50 Z" fill="#000000" stroke="#330000" stroke-width="1.5" />
+    <path d="M -14,-49 L -12,-44 L -10,-49 L -8,-44 L -6,-49 L -4,-44 L -2,-49 L 0,-44 L 2,-49 L 4,-44 L 6,-49 L 8,-44 L 10,-49 L 12,-44 L 14,-49" 
+          stroke="#e2e8f0" stroke-width="1.5" fill="none" />
+    <path d="M -12,-42 L -10,-46 L -8,-42 L -6,-46 L -4,-42 L -2,-46 L 0,-42 L 2,-46 L 4,-42 L 6,-46 L 8,-42 L 10,-46 L 12,-42" 
+          stroke="#cbd5e1" stroke-width="1.2" fill="none" />
+
+    <!-- FIERY GLOWING ORANGE/RED EYES -->
+    <g filter="url(#eyeGlow)">
+      <ellipse cx="-13" cy="-73" rx="7" ry="4.5" fill="#ff2200" transform="rotate(12, -13, -73)" />
+      <ellipse cx="-13" cy="-73" rx="4.5" ry="2.5" fill="#ffea00" transform="rotate(12, -13, -73)" />
+      <circle cx="-13" cy="-73" r="1.5" fill="#ffffff" />
+
+      <ellipse cx="13" cy="-73" rx="7" ry="4.5" fill="#ff2200" transform="rotate(-12, 13, -73)" />
+      <ellipse cx="13" cy="-73" rx="4.5" ry="2.5" fill="#ffea00" transform="rotate(-12, 13, -73)" />
+      <circle cx="13" cy="-73" r="1.5" fill="#ffffff" />
+    </g>
+  </g>
+
+  <!-- 9. TOP ARCHED TEXT: "DEAD ZONE" (Individually placed letters along curve) -->
+  ${lettersSvg}
+
+  <!-- 10. BOTTOM ELEMENT: STEEL CHAINS -->
+  <g stroke="#40464f" stroke-width="3.5" fill="none" opacity="0.9" filter="url(#metalShadow)">
+    <path d="M 120,385 Q 160,425 200,432 Q 256,440 312,432 Q 352,425 392,385" stroke-dasharray="10,6" stroke-linecap="round" stroke-width="4" />
+    <path d="M 130,395 Q 170,435 210,442 Q 256,448 302,442 Q 342,435 382,395" stroke-dasharray="8,8" stroke-linecap="round" stroke-width="2.5" stroke="#181a1d" />
+  </g>
+
+  <!-- 11. BOTTOM BANNER: "TRIGGER" STEEL PLATE -->
+  <g transform="translate(256, 362)" filter="url(#metalShadow)">
+    <rect x="-146" y="-36" width="292" height="74" rx="8" fill="#090a0c" />
+    <rect x="-144" y="-34" width="288" height="70" rx="7" fill="url(#plateGrad)" stroke="#4b5563" stroke-width="2" />
+    <rect x="-139" y="-29" width="278" height="60" rx="5" fill="#121417" stroke="#7f1d1d" stroke-width="2" />
+
+    <!-- Plate Screws / Rivets in 4 Corners -->
+    <g fill="#25282c" stroke="#525b66" stroke-width="1.2">
+      <circle cx="-130" cy="-20" r="4.5" />
+      <circle cx="130" cy="-20" r="4.5" />
+      <circle cx="-130" cy="20" r="4.5" />
+      <circle cx="130" cy="20" r="4.5" />
+    </g>
+
+    <!-- Blood Splatter on Plate -->
+    <path d="M -130,-15 Q -100,5 -80,-20 Q -60,-28 -50,-10 L -40,30 L -90,30 Z" fill="url(#bloodSplatter)" opacity="0.65" />
+    <path d="M 80,-28 Q 110,-10 135,-15 L 138,20 L 90,30 Z" fill="url(#bloodSplatter)" opacity="0.65" />
+
+    <!-- "TRIGGER" TEXT -->
+    <!-- Heavy Outline Shadow -->
+    <text x="0" y="16" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="54" letter-spacing="6" text-anchor="middle" fill="#000000" stroke="#000000" stroke-width="10" stroke-linejoin="round">TRIGGER</text>
+    <text x="0" y="16" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="54" letter-spacing="6" text-anchor="middle" fill="#450a0a" stroke="#1f2429" stroke-width="4" stroke-linejoin="round">TRIGGER</text>
+    <text x="0" y="16" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="54" letter-spacing="6" text-anchor="middle" fill="#dc2626">TRIGGER</text>
+    <text x="-1" y="14" font-family="'Impact', 'Arial Black', 'Liberation Sans', sans-serif" font-weight="900" font-size="52" letter-spacing="6" text-anchor="middle" fill="#fca5a5" opacity="0.5">TRIGGER</text>
+  </g>
+
+  <!-- 12. Stray Bullets at Bottom Left and Right -->
+  <g transform="translate(160, 420) rotate(55) scale(0.58)">
+    <rect x="0" y="8" width="10" height="22" rx="2" fill="url(#bulletBrass)" stroke="#78350f" stroke-width="1" />
+    <path d="M 0,8 Q 5,-4 10,8 Z" fill="url(#bulletTip)" />
+  </g>
+  <g transform="translate(350, 425) rotate(-65) scale(0.58)">
+    <rect x="0" y="8" width="10" height="22" rx="2" fill="url(#bulletBrass)" stroke="#78350f" stroke-width="1" />
+    <path d="M 0,8 Q 5,-4 10,8 Z" fill="url(#bulletTip)" />
+  </g>
+
+  <!-- 13. Inner Vignette Bevel Overlay -->
+  <circle cx="256" cy="256" r="212" fill="url(#innerBevel)" pointer-events="none" />
+</svg>`;
+
+// Also generate maskable version with 15% safe padding (Android adaptive icons)
+const maskableSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#0a0a0c" />
+  <g transform="translate(51.2, 51.2) scale(0.8)">
+    ${svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}
+  </g>
+</svg>`;
+
+async function run() {
+  const publicDir = path.resolve('public');
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+
+  // Write SVG files
+  fs.writeFileSync(path.join(publicDir, 'app-logo.svg'), svg.trim());
+  fs.writeFileSync(path.join(publicDir, 'icon.svg'), svg.trim());
+  fs.writeFileSync(path.join(publicDir, 'favicon.svg'), svg.trim());
+  console.log('Saved app-logo.svg, icon.svg, favicon.svg');
+
+  // Convert to PNGs using sharp
+  const svgBuffer = Buffer.from(svg);
+  const maskableBuffer = Buffer.from(maskableSvg);
+
+  // 1. App Logo PNG (512x512)
+  await sharp(svgBuffer)
+    .resize(512, 512)
+    .png()
+    .toFile(path.join(publicDir, 'app-logo.png'));
+  console.log('Generated app-logo.png (512x512)');
+
+  // 2. PWA 512x512
+  await sharp(svgBuffer)
+    .resize(512, 512)
+    .png()
+    .toFile(path.join(publicDir, 'pwa-512x512.png'));
+  console.log('Generated pwa-512x512.png');
+
+  // 3. PWA 192x192
+  await sharp(svgBuffer)
+    .resize(192, 192)
+    .png()
+    .toFile(path.join(publicDir, 'pwa-192x192.png'));
+  console.log('Generated pwa-192x192.png');
+
+  // 4. Apple Touch Icon 180x180
+  await sharp(svgBuffer)
+    .resize(180, 180)
+    .png()
+    .toFile(path.join(publicDir, 'apple-touch-icon.png'));
+  console.log('Generated apple-touch-icon.png (180x180)');
+
+  // 5. PWA Maskable 512x512
+  await sharp(maskableBuffer)
+    .resize(512, 512)
+    .png()
+    .toFile(path.join(publicDir, 'pwa-maskable-512x512.png'));
+  console.log('Generated pwa-maskable-512x512.png');
+
+  // 6. Favicon 32x32 & 16x16 PNG and favicon.ico
+  await sharp(svgBuffer)
+    .resize(32, 32)
+    .png()
+    .toFile(path.join(publicDir, 'favicon-32x32.png'));
+
+  await sharp(svgBuffer)
+    .resize(16, 16)
+    .png()
+    .toFile(path.join(publicDir, 'favicon-16x16.png'));
+
+  await sharp(svgBuffer)
+    .resize(64, 64)
+    .png()
+    .toFile(path.join(publicDir, 'favicon.ico'));
+  console.log('Generated favicon-32x32.png, favicon-16x16.png, favicon.ico');
+
+  // 7. Write static manifest.webmanifest and manifest.json to public folder
+  const manifestData = {
+    id: '/',
+    name: 'DEAD ZONE: TRIGGER',
+    short_name: 'DeadZone',
+    description: 'A high-fidelity 3D first-person zombie survival shooter with intense urban combat, weapon upgrades, and campaign missions.',
+    theme_color: '#0a0a0c',
+    background_color: '#0a0a0c',
+    display: 'standalone',
+    orientation: 'any',
+    start_url: '/',
+    scope: '/',
+    icons: [
+      {
+        src: '/pwa-192x192.png',
+        sizes: '192x192',
+        type: 'image/png',
+        purpose: 'any',
+      },
+      {
+        src: '/pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'any',
+      },
+      {
+        src: '/pwa-maskable-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
+  };
+
+  fs.writeFileSync(path.join(publicDir, 'manifest.webmanifest'), JSON.stringify(manifestData, null, 2));
+  fs.writeFileSync(path.join(publicDir, 'manifest.json'), JSON.stringify(manifestData, null, 2));
+  console.log('Wrote public/manifest.webmanifest and public/manifest.json');
+}
+
+run().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

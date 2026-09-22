@@ -1,0 +1,707 @@
+import * as THREE from 'three';
+import { ZombieInstance, ZombieModelFactory } from '../models/ZombieModel';
+import { ZombieTypeKey, HitResult, PickupItem } from '../types';
+import { ZOMBIE_DEFINITIONS } from '../data/zombies';
+import { soundFx } from '../audio/SoundEffects';
+import { ParticleSystem } from '../effects/ParticleSystem';
+import { NarrowPathSpawn } from '../models/EnvironmentBuilder';
+
+export class ZombieManager {
+  private scene: THREE.Scene;
+  public zombies: ZombieInstance[] = [];
+  public activeZombieCount: number = 0;
+  public bossInstance: ZombieInstance | null = null;
+
+  public pickups: PickupItem[] = [];
+
+  // Designated urban spawn points along the street and side alleys
+  private spawnPoints: THREE.Vector3[] = [
+    new THREE.Vector3(-8, 0, -18),
+    new THREE.Vector3(8, 0, -14),
+    new THREE.Vector3(-8, 0, -5),
+    new THREE.Vector3(8, 0, 8),
+    new THREE.Vector3(-9, 0, 22),
+    new THREE.Vector3(9, 0, 32),
+    new THREE.Vector3(0, 0, 42),
+    new THREE.Vector3(-12, 0, 15),
+  ];
+
+  // Specific narrow paths / side alleys per mission
+  private narrowPathSpawns: NarrowPathSpawn[] = [];
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+  }
+
+  public setSpawnPoints(points: THREE.Vector3[]) {
+    if (points && points.length > 0) {
+      this.spawnPoints = points.map((p) => p.clone());
+    }
+  }
+
+  public setNarrowPathSpawns(spawns: NarrowPathSpawn[]) {
+    if (spawns) {
+      this.narrowPathSpawns = spawns.map((s) => ({
+        spawn: s.spawn.clone(),
+        exitPoint: s.exitPoint.clone(),
+        name: s.name,
+      }));
+    }
+  }
+
+  public getHitboxMeshes(): THREE.Object3D[] {
+    const meshes: THREE.Object3D[] = [];
+    for (const z of this.zombies) {
+      if (!z.isDead) {
+        meshes.push(...z.hitboxMeshes);
+      }
+    }
+    return meshes;
+  }
+
+  public spawnZombie(
+    type: ZombieTypeKey,
+    customPos?: THREE.Vector3,
+    forceNarrowPath?: boolean,
+    bossOverride?: { isBoss: boolean; name: string; maxHp: number; scale?: number }
+  ): ZombieInstance {
+    const baseConfig = ZOMBIE_DEFINITIONS[type] || ZOMBIE_DEFINITIONS['walker'];
+    const config = { ...baseConfig };
+    if (bossOverride) {
+      config.isBoss = true;
+      config.name = bossOverride.name;
+      config.maxHp = bossOverride.maxHp;
+      if (bossOverride.scale) config.scale = bossOverride.scale;
+    }
+    const id = `z_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    let spawnPos: THREE.Vector3;
+    let isFromNarrow = false;
+    let narrowExit: THREE.Vector3 | null = null;
+
+    // Check if narrow path spawn should be selected
+    const shouldSpawnNarrow = !bossOverride && (forceNarrowPath ?? (this.narrowPathSpawns.length > 0 && Math.random() < 0.42 && type !== 'colossus'));
+
+    if (customPos) {
+      spawnPos = customPos.clone();
+    } else if (shouldSpawnNarrow && this.narrowPathSpawns.length > 0) {
+      const routeIdx = Math.floor(Math.random() * this.narrowPathSpawns.length);
+      const route = this.narrowPathSpawns[routeIdx];
+      spawnPos = route.spawn.clone();
+      // Slight jitter inside the alley
+      spawnPos.x += (Math.random() - 0.5) * 1.5;
+      spawnPos.z += (Math.random() - 0.5) * 2.0;
+      isFromNarrow = true;
+      narrowExit = route.exitPoint.clone();
+    } else {
+      const idx = Math.floor(Math.random() * this.spawnPoints.length);
+      spawnPos = this.spawnPoints[idx].clone();
+      // Add slight jitter along the thoroughfare
+      spawnPos.x += (Math.random() - 0.5) * 3;
+      spawnPos.z += (Math.random() - 0.5) * 4;
+    }
+
+    const zombie = ZombieModelFactory.createZombie(type, id, config, isFromNarrow, narrowExit, spawnPos);
+    zombie.attackTimer = 1.5; // Grace period on spawn
+    zombie.mesh.position.copy(spawnPos);
+
+    // Initial orientation: if emerging from narrow path, face toward the alley exit mouth
+    if (isFromNarrow && narrowExit) {
+      const toExit = new THREE.Vector3().subVectors(narrowExit, spawnPos).normalize();
+      zombie.mesh.rotation.y = Math.atan2(toExit.x, toExit.z);
+    } else {
+      // Face randomly or down the street
+      zombie.mesh.rotation.y = (Math.random() - 0.5) * Math.PI;
+    }
+
+    this.scene.add(zombie.mesh);
+    this.zombies.push(zombie);
+    this.activeZombieCount++;
+
+    if (config.isBoss || type === 'colossus') {
+      zombie.isBoss = true;
+      zombie.bossName = config.name;
+      zombie.maxHp = config.maxHp;
+      zombie.hp = config.maxHp;
+      this.bossInstance = zombie;
+      zombie.isAlerted = true; // Boss is active immediately
+      zombie.state = 'CHASE';
+      soundFx.playBossRoar();
+    }
+
+    return zombie;
+  }
+
+  // Gunshots reverberate through the district, alerting dormant zombies within auditory range with acoustic latency
+  public onGunshotFired(playerPosition: THREE.Vector3, soundRadius: number = 28) {
+    for (const z of this.zombies) {
+      if (z.isDead) continue;
+      const dist = z.mesh.position.distanceTo(playerPosition);
+      if (dist <= soundRadius && !z.isAlerted) {
+        // Acoustic latency: closer zombies hear and react first, distant zombies register seconds later
+        const acousticDelay = 0.25 + (dist / soundRadius) * 0.95;
+        z.isAlerted = true;
+        z.state = 'ALERT';
+        z.stateTimer = acousticDelay;
+
+        // Occasional audio growl when registering the gunshot
+        if (Math.random() < 0.45 && dist < 24) {
+          const pitch = z.type === 'brute' || z.type === 'colossus' ? 0.65 : z.type === 'runner' ? 1.25 : 1.0;
+          soundFx.playZombieGrowl(pitch);
+        }
+      }
+    }
+  }
+
+  public applyDamage(
+    hit: HitResult,
+    onKill: (zombie: ZombieInstance, isHeadshot: boolean) => void,
+    playerPos?: THREE.Vector3
+  ): { isFatal: boolean; zombie: ZombieInstance | null } {
+    const zombie = this.zombies.find((z) => z.id === hit.targetId);
+    if (!zombie || zombie.isDead) return { isFatal: false, zombie: null };
+
+    // Enforcer body armor absorbs 45% of chest damage
+    let finalDamage = hit.damage;
+    if (zombie.type === 'enforcer' && hit.zone === 'TORSO') {
+      finalDamage = Math.max(1, Math.round(finalDamage * 0.55));
+    }
+
+    zombie.hp -= finalDamage;
+    zombie.isAlerted = true; // Instantly alerted upon receiving damage
+    zombie.state = 'STAGGER';
+    zombie.staggerTimer = 0.22;
+
+    const hitPos = hit.point
+      ? new THREE.Vector3(hit.point[0], hit.point[1], hit.point[2])
+      : zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    const isSpitter = zombie.type === 'spitter';
+    const isHeadshot = hit.zone === 'HEAD';
+    const isHeavyShot = finalDamage >= 40 || hit.zone === 'WEAKPOINT' || hit.zone === 'BARREL';
+
+    // Armor sparks on enforcer torso hit
+    if (zombie.type === 'enforcer' && hit.zone === 'TORSO') {
+      ParticleSystem.spawnSparks(hitPos);
+    }
+
+    // Dynamic blood splatter on every hit
+    ParticleSystem.spawnBlood(
+      hitPos,
+      new THREE.Vector3(0, 0.4, 0),
+      isHeadshot,
+      isSpitter,
+      isHeavyShot
+    );
+
+    // Bullet-hit slowdown ("They slowed down when shot down")
+    const slowFactor = isHeavyShot ? 0.32 : 0.52;
+    const slowDuration = isHeavyShot ? 1.2 : 0.75;
+    zombie.slowTimer = Math.max(zombie.slowTimer || 0, slowDuration);
+    zombie.slowMultiplier = Math.min(zombie.slowMultiplier || 1.0, slowFactor);
+
+    // Volatile explosive fuel drum strapped to chest (matching image)
+    if (hit.zone === 'BARREL' && !zombie.isDead) {
+      soundFx.playExplosion();
+      ParticleSystem.spawnExplosion(zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+      zombie.hp = 0; // Detonates instantly
+      this.damageArea(zombie.mesh.position, 6.8, 390, onKill);
+    }
+
+    // Chain alert nearby zombies within 12 meters hearing the impact & pain roar
+    for (const other of this.zombies) {
+      if (other !== zombie && !other.isDead && !other.isAlerted) {
+        const d = other.mesh.position.distanceTo(zombie.mesh.position);
+        if (d < 12) {
+          other.isAlerted = true;
+          other.state = 'ALERT';
+          other.stateTimer = 0.25 + Math.random() * 0.6;
+        }
+      }
+    }
+
+    if (zombie.hp <= 0) {
+      zombie.isDead = true;
+      zombie.hp = 0;
+      zombie.state = 'DEAD';
+      this.activeZombieCount = Math.max(0, this.activeZombieCount - 1);
+
+      // Bloater toxic chemical explosion on death
+      if (zombie.type === 'bloater') {
+        soundFx.playExplosion();
+        ParticleSystem.spawnExplosion(zombie.mesh.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
+        this.damageArea(zombie.mesh.position, 6.5, 260, onKill);
+      }
+
+      // Boss death audio and impact shockwave
+      if (zombie.isBoss) {
+        soundFx.playBossDeath();
+        ParticleSystem.spawnExplosion(zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+      }
+
+      // Decapitation gore effect on fatal headshot
+      if (hit.zone === 'HEAD') {
+        zombie.isDecapitated = true;
+        zombie.head.visible = false;
+        ParticleSystem.spawnGoreGibs(zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.6, 0)), new THREE.Vector3(0, 1, 0), 8);
+        ParticleSystem.spawnBlood(zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.6, 0)), new THREE.Vector3(0, 1, 0), true, zombie.type === 'spitter');
+        soundFx.playDismemberment();
+      } else if (hit.zone === 'LIMB' && Math.random() < 0.6) {
+        zombie.isDismemberedArm = true;
+        zombie.leftArm.visible = false;
+        ParticleSystem.spawnGoreGibs(zombie.mesh.position.clone().add(new THREE.Vector3(-0.4, 1.3, 0)), new THREE.Vector3(-1, 0.5, 0), 4);
+        soundFx.playDismemberment();
+      }
+
+      // Ground blood pool under deceased zombie with type-scaled size
+      const poolSize = zombie.type === 'colossus' ? 4.8 : zombie.type === 'brute' ? 3.2 : 2.4;
+      ParticleSystem.spawnBloodDecal(new THREE.Vector3(zombie.mesh.position.x, 0.02, zombie.mesh.position.z), poolSize);
+      // Directional splatter from impact
+      ParticleSystem.spawnBlood(zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.0, 0)), new THREE.Vector3(0, 0.5, 0), hit.zone === 'HEAD', zombie.type === 'spitter');
+
+      // Dynamic Visceral Screen Blood Splatter if killed in close quarters (< 4.2 meters)
+      if (playerPos && zombie.mesh.position.distanceTo(playerPos) < 4.2) {
+        ParticleSystem.addScreenBlood(0.35, zombie.type === 'spitter' ? 'acid' : 'blood');
+      }
+
+      // Reward credits & audio
+      soundFx.playCashEarned();
+
+      // Chance to drop Ammo or Medkit
+      const dropRoll = Math.random();
+      if (dropRoll < 0.28) {
+        const pickupType = dropRoll < 0.12 ? 'MEDKIT' : 'AMMO';
+        const pickup: PickupItem = {
+          id: `p_${Date.now()}_${Math.random()}`,
+          type: pickupType,
+          value: pickupType === 'MEDKIT' ? 35 : 30,
+          position: [zombie.mesh.position.x, 0, zombie.mesh.position.z],
+        };
+        this.pickups.push(pickup);
+        ParticleSystem.createPickupMesh(pickup);
+      }
+
+      onKill(zombie, hit.zone === 'HEAD');
+      return { isFatal: true, zombie };
+    }
+
+    return { isFatal: false, zombie };
+  }
+
+  public damageArea(center: THREE.Vector3, radius: number, damage: number, onKill: (zombie: ZombieInstance, isHeadshot: boolean) => void) {
+    for (const z of this.zombies) {
+      if (z.isDead) continue;
+      const dist = z.mesh.position.distanceTo(center);
+      if (dist <= radius) {
+        const falloff = 1 - dist / radius;
+        const totalDmg = Math.round(damage * Math.max(0.3, falloff));
+        this.applyDamage({ hit: true, zone: 'TORSO', damage: totalDmg, isFatal: false, targetId: z.id }, onKill);
+      }
+    }
+  }
+
+  public update(
+    delta: number,
+    playerPosition: THREE.Vector3,
+    onPlayerAttacked: (damage: number, attackerPos: THREE.Vector3) => void,
+    playerForward?: THREE.Vector3,
+    isFlashlightOn: boolean = false,
+    droneTarget?: { isDeployed: boolean; position: THREE.Vector3; onDamageDrone?: (amount: number) => void }
+  ) {
+    for (let i = this.zombies.length - 1; i >= 0; i--) {
+      const z = this.zombies[i];
+
+      // Remove after death animation
+      if (z.isDead) {
+        ZombieModelFactory.updateZombieAnimation(z, delta, 10);
+        if (z.deathTimer > 3.5) {
+          this.scene.remove(z.mesh);
+          this.zombies.splice(i, 1);
+          if (this.bossInstance === z) this.bossInstance = null;
+        }
+        continue;
+      }
+
+      const distToPlayer = z.mesh.position.distanceTo(playerPosition);
+
+      // Target determination: player or low recon drone (when altitude <= 3.8m)
+      let targetPos = playerPosition;
+      let distToTarget = distToPlayer;
+      let isTargetingDrone = false;
+
+      if (droneTarget?.isDeployed) {
+        const dronePos = droneTarget.position;
+        const hDistToDrone = new THREE.Vector2(z.mesh.position.x - dronePos.x, z.mesh.position.z - dronePos.z).length();
+        const distToDrone = z.mesh.position.distanceTo(dronePos);
+
+        // Drone is flying low (<= 3.8m altitude, down to 1m) and within attack awareness
+        if (dronePos.y <= 3.8) {
+          if (hDistToDrone < 12.0 || (hDistToDrone < distToPlayer && distToPlayer > 6.0)) {
+            targetPos = dronePos;
+            distToTarget = distToDrone;
+            isTargetingDrone = true;
+            z.isAlerted = true;
+            if (z.state === 'IDLE' || z.state === 'WANDER') {
+              z.state = 'CHASE';
+            }
+          }
+        }
+      }
+
+      // Screamer variant: shrieks and alerts entire district
+      if (z.type === 'screamer' && z.isAlerted && !z.isDead && !z.hasScreamed) {
+        z.hasScreamed = true;
+        soundFx.playScreamerScreech();
+        ParticleSystem.spawnSparks(z.mesh.position.clone().add(new THREE.Vector3(0, 1.6, 0)));
+        for (const other of this.zombies) {
+          if (other !== z && !other.isDead && !other.isAlerted) {
+            if (other.mesh.position.distanceTo(z.mesh.position) <= 40.0) {
+              other.isAlerted = true;
+              other.state = 'ALERT';
+              other.stateTimer = 0.2 + Math.random() * 0.4;
+            }
+          }
+        }
+      }
+
+      // Final Boss Mechanics: Sudden Fast Running ability (Frenzy Charge)
+      if (z.isBoss) {
+        if (!this.bossInstance) this.bossInstance = z;
+
+        if (!z.isFrenzied) {
+          z.frenzyCooldownTimer = (z.frenzyCooldownTimer || 7.0) - delta;
+          if (z.frenzyCooldownTimer <= 0 && distToTarget > 4.0 && distToTarget < 48.0) {
+            z.isFrenzied = true;
+            z.frenzyTimer = 3.6;
+            z.frenzyCooldownTimer = 8.5 + Math.random() * 4.0;
+            soundFx.playFrenzyRoar();
+            ParticleSystem.spawnSparks(z.mesh.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
+          }
+        } else {
+          z.frenzyTimer = (z.frenzyTimer || 3.6) - delta;
+          if (Math.random() < 0.35) {
+            ParticleSystem.spawnSparks(z.mesh.position.clone().add(new THREE.Vector3(0, 0.2, 0)));
+          }
+          if (z.frenzyTimer <= 0 || distToTarget < 2.0) {
+            z.isFrenzied = false;
+            z.exhaustionTimer = 1.2;
+          }
+        }
+
+        if (z.exhaustionTimer && z.exhaustionTimer > 0) {
+          z.exhaustionTimer -= delta;
+        }
+      }
+
+      // Dynamic Wounded Zombie Blood Dripping Trail
+      if (z.hp < z.config.maxHp) {
+        z.bleedTimer = (z.bleedTimer || 0) - delta;
+        const bleedInterval = z.hp < z.config.maxHp * 0.4 ? 0.35 : 0.75;
+        if (z.bleedTimer <= 0) {
+          z.bleedTimer = bleedInterval + Math.random() * 0.25;
+          const dripPos = z.mesh.position.clone().add(
+            new THREE.Vector3((Math.random() - 0.5) * 0.35, 0.8, (Math.random() - 0.5) * 0.35)
+          );
+          ParticleSystem.spawnBleedDrip(dripPos);
+        }
+      }
+
+      // Groan audio (only if alerted or player is close)
+      z.groanTimer -= delta;
+      if (z.groanTimer <= 0 && distToPlayer < 22 && (z.isAlerted || distToPlayer < 12)) {
+        const pitch = z.type === 'brute' || z.type === 'colossus' ? 0.6 : z.type === 'runner' ? 1.3 : 1.0;
+        soundFx.playZombieGrowl(pitch);
+        z.groanTimer = Math.random() * 5 + 3;
+      }
+
+      // 1. ATTRACTION & PROXIMITY DETECTION
+      // Zombies only attract when player is near to them or visible in front
+      if (!z.isAlerted) {
+        let shouldAlert = false;
+
+        // Immediate proximity scent / heavy footsteps (< 7 meters)
+        if (distToPlayer <= 7.0) {
+          shouldAlert = true;
+        }
+        // Within detection radius: check field of view
+        else if (distToPlayer <= z.detectionRadius) {
+          const zFwd = new THREE.Vector3(Math.sin(z.mesh.rotation.y), 0, Math.cos(z.mesh.rotation.y));
+          const toPlayer = new THREE.Vector3().subVectors(playerPosition, z.mesh.position).normalize();
+          const dot = zFwd.dot(toPlayer);
+
+          // Facing player (approx 200 deg vision cone)
+          if (dot > -0.2) {
+            shouldAlert = true;
+          } else if (distToPlayer <= z.detectionRadius * 0.45) {
+            // Close hearing behind back
+            shouldAlert = true;
+          }
+        }
+
+        // High-powered tactical flashlight beam detection (sweeping high-lumen beam illuminates and alerts zombies up to 42m)
+        if (!shouldAlert && isFlashlightOn && playerForward && distToPlayer <= 42.0) {
+          const pToZ = new THREE.Vector3().subVectors(z.mesh.position, playerPosition).normalize();
+          if (playerForward.dot(pToZ) > 0.82) {
+            shouldAlert = true;
+          }
+        }
+
+        if (shouldAlert) {
+          z.isAlerted = true;
+          z.state = 'ALERT';
+          z.stateTimer = z.alertReactionTimer; // Staggered reaction time (not all react at same frame)
+
+          if (Math.random() < 0.5 && distToPlayer < 24) {
+            const pitch = z.type === 'brute' || z.type === 'colossus' ? 0.65 : z.type === 'runner' ? 1.25 : 1.0;
+            soundFx.playZombieGrowl(pitch);
+          }
+        }
+      }
+
+      // Attack cooldown timer
+      if (z.attackTimer > 0) {
+        z.attackTimer -= delta;
+      }
+
+      // 2. UNALERTED BEHAVIOR: IDLE & AMBIENT WANDERING OR NARROW PATH EMERGENCE
+      if (!z.isAlerted) {
+        // Emerging out of narrow path
+        if (z.isFromNarrowPath && !z.hasExitedNarrowPath && z.narrowPathExit) {
+          const toExit = new THREE.Vector3().subVectors(z.narrowPathExit, z.mesh.position);
+          toExit.y = 0;
+          const distToExit = toExit.length();
+
+          if (distToExit > 1.2) {
+            toExit.normalize();
+            const exitAngle = Math.atan2(toExit.x, toExit.z);
+            z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, exitAngle, delta * 4);
+            z.state = 'WANDER';
+
+            const shambleSpeed = z.speed * z.speedMultiplier * 0.42;
+            const fwd = new THREE.Vector3(Math.sin(z.mesh.rotation.y), 0, Math.cos(z.mesh.rotation.y));
+            z.mesh.position.addScaledVector(fwd, shambleSpeed * delta);
+          } else {
+            z.hasExitedNarrowPath = true;
+            z.state = 'IDLE';
+            z.wanderTimer = Math.random() * 4 + 2;
+          }
+        } else {
+          // Standard idle / slow shuffle around spawn origin
+          z.wanderTimer -= delta;
+          if (z.wanderTimer <= 0) {
+            if (z.state === 'IDLE') {
+              z.state = 'WANDER';
+              z.wanderTimer = Math.random() * 4 + 3;
+              const ang = Math.random() * Math.PI * 2;
+              const rad = Math.random() * 3.5 + 1.5;
+              z.wanderTarget = new THREE.Vector3(
+                z.spawnOrigin.x + Math.sin(ang) * rad,
+                0,
+                z.spawnOrigin.z + Math.cos(ang) * rad
+              );
+            } else {
+              z.state = 'IDLE';
+              z.wanderTimer = Math.random() * 4 + 2;
+              z.wanderTarget = null;
+            }
+          }
+
+          if (z.state === 'WANDER' && z.wanderTarget) {
+            const toTgt = new THREE.Vector3().subVectors(z.wanderTarget, z.mesh.position);
+            toTgt.y = 0;
+            if (toTgt.length() > 0.8) {
+              toTgt.normalize();
+              const targetAngle = Math.atan2(toTgt.x, toTgt.z);
+              z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, targetAngle, delta * 3);
+
+              const wanderSpeed = z.speed * z.speedMultiplier * 0.35;
+              const fwd = new THREE.Vector3(Math.sin(z.mesh.rotation.y), 0, Math.cos(z.mesh.rotation.y));
+              z.mesh.position.addScaledVector(fwd, wanderSpeed * delta);
+            } else {
+              z.state = 'IDLE';
+              z.wanderTimer = Math.random() * 3 + 2;
+              z.wanderTarget = null;
+            }
+          }
+        }
+      }
+      // 3. ALERTED BEHAVIOR: ALERT REACTION, CHASE & ATTACK
+      else {
+        // Direct Drone Attack Check (when drone is within striking distance)
+        if (isTargetingDrone && droneTarget?.isDeployed) {
+          const dronePos = droneTarget.position;
+          const hDist = new THREE.Vector2(z.mesh.position.x - dronePos.x, z.mesh.position.z - dronePos.z).length();
+          if (hDist < 2.3 && dronePos.y <= 2.8) {
+            z.state = 'ATTACK';
+            const dx = dronePos.x - z.mesh.position.x;
+            const dz = dronePos.z - z.mesh.position.z;
+            z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, Math.atan2(dx, dz), delta * 8);
+
+            if (z.attackTimer <= 0) {
+              z.attackTimer = z.config.attackCooldown;
+              soundFx.playZombieAttack();
+              droneTarget.onDamageDrone?.(z.config.damage);
+              ParticleSystem.spawnSparks(dronePos.clone());
+            }
+            ZombieModelFactory.updateZombieAnimation(z, delta, distToTarget);
+            continue;
+          }
+        }
+
+        // Reaction delay before rushing
+        if (z.state === 'ALERT') {
+          const dx = targetPos.x - z.mesh.position.x;
+          const dz = targetPos.z - z.mesh.position.z;
+          const targetAngle = Math.atan2(dx, dz);
+          z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, targetAngle, delta * 6);
+
+          z.stateTimer -= delta;
+          if (z.stateTimer <= 0) {
+            z.state = 'CHASE';
+          }
+        } else if (z.state === 'STAGGER') {
+          z.staggerTimer -= delta;
+          if (z.staggerTimer <= 0) {
+            z.state = 'CHASE';
+          }
+        } else if (z.state === 'ATTACK' || z.state === 'CHASE') {
+          if (!isTargetingDrone && distToPlayer <= z.config.attackRange) {
+            // ATTACK PLAYER
+            z.state = 'ATTACK';
+            const dx = playerPosition.x - z.mesh.position.x;
+            const dz = playerPosition.z - z.mesh.position.z;
+            z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, Math.atan2(dx, dz), delta * 8);
+
+            // PREVENT FAST ZOMBIES GETTING STUCK TO PLAYER
+            z.strafeTimer -= delta;
+            if (z.strafeTimer <= 0) {
+              z.strafeTimer = 1.0 + Math.random() * 1.5;
+              z.strafeDir = Math.random() < 0.5 ? -1 : 1;
+            }
+
+            const toPlayerNorm = new THREE.Vector3(dx, 0, dz).normalize();
+            const rightVec = new THREE.Vector3(-toPlayerNorm.z, 0, toPlayerNorm.x);
+
+            // Push away immediately if overlapping player (< 1.1m) so fast zombies never get glued/stuck to player
+            if (distToPlayer < 1.1 && distToPlayer > 0.01) {
+              const pushAwaySpeed = z.type === 'runner' ? 3.8 : 2.2;
+              z.mesh.position.addScaledVector(toPlayerNorm, -pushAwaySpeed * delta);
+            } else if (distToPlayer < 1.35) {
+              const backSpeed = z.type === 'runner' ? 2.2 : 1.3;
+              z.mesh.position.addScaledVector(toPlayerNorm, -backSpeed * delta);
+            }
+
+            // Circle around player laterally so they do not jam into a single sticky cluster
+            const strafeSpeed = (z.type === 'runner' ? 2.4 : 1.2) * z.strafeDir;
+            z.mesh.position.addScaledVector(rightVec, strafeSpeed * delta);
+
+            if (z.attackTimer <= 0) {
+              z.attackTimer = z.config.attackCooldown;
+              soundFx.playZombieAttack();
+              // Blood/gore effect of zombie is placed on ground/floor, not on screen
+              const impactFloor = z.mesh.position.clone();
+              impactFloor.y = 0.02;
+              ParticleSystem.spawnBloodDecal(impactFloor, z.type === 'colossus' ? 2.5 : 1.4);
+              onPlayerAttacked(z.config.damage, z.mesh.position);
+            }
+          } else {
+            // CHASE
+            z.state = 'CHASE';
+
+            // Bleeding drops left on ground by wounded zombies
+            if (z.hp < z.config.maxHp * 0.45 && Math.random() < 0.08) {
+              ParticleSystem.spawnBleedDrip(z.mesh.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
+            }
+
+            // Path navigation: if inside a narrow path, navigate toward the exit point to reach the street
+            let navTarget = targetPos;
+            if (z.isFromNarrowPath && !z.hasExitedNarrowPath && z.narrowPathExit) {
+              const toExit = new THREE.Vector3().subVectors(z.narrowPathExit, z.mesh.position);
+              toExit.y = 0;
+              if (toExit.length() > 1.4) {
+                navTarget = z.narrowPathExit;
+              } else {
+                z.hasExitedNarrowPath = true;
+              }
+            }
+
+            // Face destination smoothly
+            const dx = navTarget.x - z.mesh.position.x;
+            const dz = navTarget.z - z.mesh.position.z;
+            const targetAngle = Math.atan2(dx, dz);
+            z.mesh.rotation.y = THREE.MathUtils.lerp(z.mesh.rotation.y, targetAngle, delta * 7);
+
+            // FLOCKING & LATERAL SEPARATION ("not all of them should come together to the player")
+            // Apply soft repulsion between pursuing zombies so they fan out across sidewalks & alleys
+            let sepX = 0;
+            let sepZ = 0;
+            for (const other of this.zombies) {
+              if (other === z || other.isDead) continue;
+              const dist = z.mesh.position.distanceTo(other.mesh.position);
+              if (dist < 1.8 && dist > 0.05) {
+                const push = (1.8 - dist) / 1.8;
+                sepX += ((z.mesh.position.x - other.mesh.position.x) / dist) * push;
+                sepZ += ((z.mesh.position.z - other.mesh.position.z) / dist) * push;
+              }
+            }
+
+            // Boss Berserk / Frenzy Phase check
+            let currentSpeed = z.speed * z.speedMultiplier;
+            if (z.isFrenzied) {
+              currentSpeed *= 2.75; // Sudden fast running ability!
+            } else if (z.exhaustionTimer && z.exhaustionTimer > 0) {
+              currentSpeed *= 0.55; // Post-sprint recovery
+            } else if (z.type === 'colossus' && z.hp < z.maxHp * 0.5) {
+              currentSpeed *= 1.4; // 40% faster in rage mode!
+            }
+
+            // Apply bullet-hit slowdown ("They slowed down when shot down")
+            if (z.slowTimer > 0) {
+              currentSpeed *= z.slowMultiplier;
+            }
+
+            // Forward movement combined with lateral separation
+            const forward = new THREE.Vector3(Math.sin(z.mesh.rotation.y), 0, Math.cos(z.mesh.rotation.y));
+            const moveVec = forward.multiplyScalar(currentSpeed);
+            moveVec.x += sepX * 1.5;
+            moveVec.z += sepZ * 1.5;
+
+            z.mesh.position.addScaledVector(moveVec, delta);
+
+            // Keep in bounds across expanded map
+            z.mesh.position.x = Math.max(-115, Math.min(115, z.mesh.position.x));
+            z.mesh.position.z = Math.max(-145, Math.min(155, z.mesh.position.z));
+          }
+        }
+      }
+
+      // Update procedural animation based on state
+      ZombieModelFactory.updateZombieAnimation(z, delta, distToTarget);
+    }
+  }
+
+  public checkPickups(playerPos: THREE.Vector3, onPickup: (item: PickupItem) => void) {
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i];
+      const dist = new THREE.Vector3(p.position[0], p.position[1], p.position[2]).distanceTo(playerPos);
+      if (dist < 2.0) {
+        ParticleSystem.removePickupMesh(p.id);
+        this.pickups.splice(i, 1);
+        onPickup(p);
+      }
+    }
+  }
+
+  public clearAll() {
+    for (const z of this.zombies) {
+      this.scene.remove(z.mesh);
+    }
+    this.zombies = [];
+    this.activeZombieCount = 0;
+    this.bossInstance = null;
+    for (const p of this.pickups) {
+      ParticleSystem.removePickupMesh(p.id);
+    }
+    this.pickups = [];
+  }
+}
+
